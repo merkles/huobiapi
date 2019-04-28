@@ -2,12 +2,12 @@ package huobiapi
 
 import (
 	"fmt"
+	"huobiapi/data_type"
 	"testing"
 	"time"
 
 	"github.com/bitly/go-simplejson"
 	"github.com/stretchr/testify/assert"
-	"github.com/leizongmin/huobiapi/data_type"
 )
 
 func TestNewMarket(t *testing.T) {

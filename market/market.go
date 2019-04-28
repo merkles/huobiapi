@@ -5,10 +5,9 @@ import (
 	"fmt"
 	"time"
 
-	"math"
-
 	"github.com/bitly/go-simplejson"
-	"github.com/leizongmin/huobiapi/debug"
+	"huobiapi/debug"
+	"math"
 	"sync"
 )
 

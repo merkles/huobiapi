@@ -21,7 +21,7 @@ package main
 
 import (
     "fmt"
-    "github.com/leizongmin/huobiapi"
+    "github.com/merkles/huobiapi"
 )
 
 func main() {
