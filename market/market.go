@@ -277,6 +277,7 @@ func (m *Market) Unsubscribe(topic string) error {
 			return fmt.Errorf(msg)
 		}
 	}
+	return nil
 }
 
 // Request 请求行情信息
