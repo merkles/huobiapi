@@ -15,6 +15,11 @@ type subData struct {
 	ID  string `json:"id"`
 }
 
+type unSubData struct {
+	Unsub string `json:"unsub"`
+	ID    string `json:"id"`
+}
+
 type reqData struct {
 	Req string `json:"req"`
 	ID  string `json:"id"`
