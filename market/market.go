@@ -255,12 +255,9 @@ func (m *Market) Subscribe(topic string, listener Listener) error {
 func (m *Market) Unsubscribe(topic string) error {
 	debug.Println("unSubscribe", topic)
 
-	var isNew = false
 	// 如果未曾发送过订阅指令，则发送，并等待订阅操作结果，否则直接返回
 	if _, ok := m.subscribedTopic[topic]; ok {
-		m.subscribeResultCb[topic] = make(jsonChan)
 		m.sendMessage(unSubData{ID: topic, Unsub: topic})
-		isNew = true
 	} else {
 		debug.Println("not exsit sub toipic ")
 	}
@@ -270,13 +267,6 @@ func (m *Market) Unsubscribe(topic string) error {
 	delete(m.listeners, topic)
 	m.listenerMutex.Unlock()
 
-	if isNew {
-		var json = <-m.subscribeResultCb[topic]
-		// 判断订阅结果，如果出错则返回出错信息
-		if msg, err := json.Get("err-msg").String(); err == nil {
-			return fmt.Errorf(msg)
-		}
-	}
 	return nil
 }
 
