@@ -23,7 +23,8 @@ type wsOperation struct {
 }
 
 type Market struct {
-	ws *SafeWebSocket
+	ws       *SafeWebSocket
+	endPoint string
 
 	listeners         map[string]Listener
 	listenerMutex     sync.Mutex
@@ -47,11 +48,12 @@ type Market struct {
 type Listener = func(topic string, json *simplejson.Json)
 
 // NewMarket 创建Market实例
-func NewMarket() (m *Market, err error) {
+func NewMarket(enPoint string) (m *Market, err error) {
 	m = &Market{
 		HeartbeatInterval: 5 * time.Second,
 		ReceiveTimeout:    10 * time.Second,
 		ws:                nil,
+		endPoint:          enPoint,
 		autoReconnect:     true,
 		listeners:         make(map[string]Listener),
 		subscribeResultCb: make(map[string]jsonChan),
@@ -69,7 +71,7 @@ func NewMarket() (m *Market, err error) {
 // connect 连接
 func (m *Market) connect() error {
 	debug.Println("connecting")
-	ws, err := NewSafeWebSocket(Endpoint)
+	ws, err := NewSafeWebSocket(m.endPoint)
 	if err != nil {
 		return err
 	}
@@ -264,6 +266,7 @@ func (m *Market) Unsubscribe(topic string) error {
 
 	m.listenerMutex.Lock()
 	// 火币网没有提供取消订阅的接口，只能删除监听器
+	delete(m.subscribedTopic, topic)
 	delete(m.listeners, topic)
 	m.listenerMutex.Unlock()
 
