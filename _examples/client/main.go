@@ -2,7 +2,8 @@ package main
 
 import (
 	"fmt"
-	"huobiapi"
+
+	"github.com/merkles/huobiapi"
 )
 
 func main() {

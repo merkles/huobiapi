@@ -2,9 +2,8 @@ package client
 
 import (
 	"fmt"
-	"testing"
-
 	"os"
+	"testing"
 
 	"github.com/stretchr/testify/assert"
 )

@@ -2,8 +2,8 @@ package huobiapi
 
 import (
 	"github.com/bitly/go-simplejson"
-	"huobiapi/client"
-	"huobiapi/market"
+	"github.com/merkles/huobiapi/client"
+	"github.com/merkles/huobiapi/market"
 )
 
 type JSON = simplejson.Json
@@ -15,12 +15,12 @@ type Client = client.Client
 
 // 创建WebSocket版Market客户端
 func NewMarket() (*market.Market, error) {
-	return market.NewMarket(market.Endpoint)
+	return market.NewMarket(market.Endpoint, false, "", "")
 }
 
 /// 创建WebSocket版Market客户端,指定endPoint
-func NewMarketByEndPoint(endPoint string) (*market.Market, error) {
-	return market.NewMarket(endPoint)
+func NewMarketByEndPoint(endPoint string, isAuth bool, accessKeyId, accessKeySecret string) (*market.Market, error) {
+	return market.NewMarket(endPoint, isAuth, accessKeyId, accessKeySecret)
 }
 
 /// 创建RESTFul客户端

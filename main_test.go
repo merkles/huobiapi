@@ -2,11 +2,11 @@ package huobiapi
 
 import (
 	"fmt"
-	"huobiapi/data_type"
 	"testing"
 	"time"
 
 	"github.com/bitly/go-simplejson"
+	"github.com/merkles/huobiapi/data_type"
 	"github.com/stretchr/testify/assert"
 )
 

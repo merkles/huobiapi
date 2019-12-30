@@ -2,17 +2,22 @@ package market
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"github.com/merkles/huobiapi/client"
+	"math"
+	"net/url"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/bitly/go-simplejson"
-	"huobiapi/debug"
-	"math"
-	"sync"
+	"github.com/merkles/huobiapi/debug"
 )
 
 // Endpoint 行情的Websocket入口
 var Endpoint = "wss://api.huobi.pro/ws"
+var AssetEndPoint = "wss://api.huobi.pro/ws/v1"
 
 // ConnectionClosedError Websocket未连接错误
 var ConnectionClosedError = fmt.Errorf("websocket connection closed")
@@ -23,8 +28,11 @@ type wsOperation struct {
 }
 
 type Market struct {
-	ws       *SafeWebSocket
-	endPoint string
+	isMustAuth    bool
+	isAuthSuccess bool
+	sign          *client.Sign
+	ws            *SafeWebSocket
+	endPoint      string
 
 	listeners         map[string]Listener
 	listenerMutex     sync.Mutex
@@ -48,8 +56,10 @@ type Market struct {
 type Listener = func(topic string, json *simplejson.Json)
 
 // NewMarket 创建Market实例
-func NewMarket(enPoint string) (m *Market, err error) {
+func NewMarket(enPoint string, isAuth bool, accessKeyId, accessKeySecret string) (m *Market, err error) {
 	m = &Market{
+		isMustAuth:        isAuth,
+		sign:              client.NewSign(accessKeyId, accessKeySecret),
 		HeartbeatInterval: 5 * time.Second,
 		ReceiveTimeout:    10 * time.Second,
 		ws:                nil,
@@ -77,10 +87,19 @@ func (m *Market) connect() error {
 	}
 	m.ws = ws
 	m.lastPing = getUinxMillisecond()
+	m.isAuthSuccess = false
 	debug.Println("connected")
 
 	m.handleMessageLoop()
 	m.keepAlive()
+
+	//发送鉴权
+	if m.isMustAuth {
+		debug.Println("发送鉴权消息")
+		m.sendAuth()
+	} else {
+		m.isAuthSuccess = true
+	}
 
 	return nil
 }
@@ -116,6 +135,7 @@ func (m *Market) sendMessage(data interface{}) error {
 	if err != nil {
 		return nil
 	}
+	//fmt.Println("test:", string(b))
 	debug.Println("sendMessage", string(b))
 	m.ws.Send(b)
 	return nil
@@ -126,6 +146,7 @@ func (m *Market) handleMessageLoop() {
 	m.ws.Listen(func(buf []byte) {
 		msg, err := unGzipData(buf)
 		debug.Println("readMessage", string(msg))
+		//fmt.Println("readMessage", string(msg))
 		if err != nil {
 			debug.Println(err)
 			return
@@ -133,6 +154,12 @@ func (m *Market) handleMessageLoop() {
 		json, err := simplejson.NewJson(msg)
 		if err != nil {
 			debug.Println(err)
+			return
+		}
+
+		//处理auth message
+		if op := json.Get("op").MustString(); op != "" {
+			m.handleAuthMessageLoop(json)
 			return
 		}
 
@@ -191,11 +218,47 @@ func (m *Market) handleMessageLoop() {
 	})
 }
 
+func (m *Market) handleAuthMessageLoop(json *simplejson.Json) {
+	//fmt.Println("ws2:",json)
+	op, err := json.Get("op").String()
+	if err != nil {
+		debug.Println(err)
+		//fmt.Println(err)
+		return
+	}
+	switch op {
+	case "ping":
+		m.handleAuthPing(json)
+	case "pong":
+		m.handleAuthPong(json)
+	case "auth":
+		m.handleAuthMessage(json)
+	case "sub":
+		m.handleAuthSub(json)
+	case "unsub":
+		m.handleAuthUnSub(json)
+	case "notify":
+		//fmt.Println("notify")
+		m.handleAuthNotify(json)
+	default:
+		//fmt.Println("default data", op, json)
+		debug.Println("default data:", json)
+	}
+
+}
+
 // keepAlive 保持活跃
 func (m *Market) keepAlive() {
 	m.ws.KeepAlive(m.HeartbeatInterval, func() {
 		var t = getUinxMillisecond()
-		m.sendMessage(pingData{Ping: t})
+		var data interface{}
+		if m.isMustAuth {
+			data = authPingPongData{OP: "ping", TS: t}
+			//auth方式发现不支持主动ping
+		} else {
+			data = pingData{Ping: t}
+			m.sendMessage(data)
+		}
 
 		// 检查上次ping时间，如果超过20秒无响应，重新连接
 		tr := time.Duration(math.Abs(float64(t - m.lastPing)))
@@ -211,12 +274,48 @@ func (m *Market) keepAlive() {
 	})
 }
 
+func (m *Market) getCid() string {
+	return fmt.Sprintf("%p", m)
+}
+
+func (m *Market) sendAuth() {
+	urlInfo, err := url.Parse(m.endPoint)
+	if err != nil {
+		return
+	}
+
+	method := strings.ToUpper("GET")
+	timestamp := m.timeStamp()
+	// 参与计算签名的参数
+	signData := make(map[string]string)
+	//signData["op"] = "auth"
+	//signData["cid"] =m.getCid()
+
+	//fmt.Println(urlInfo.Host, urlInfo.Path)
+	s, err := m.sign.Get(method, urlInfo.Host, urlInfo.Path, timestamp, signData)
+	if err != nil {
+		return
+	}
+	data := authSub{OP: "auth", CID: m.getCid(), AccessKeyId: m.sign.AccessKeyId, SignatureMethod: m.sign.SignatureMethod, SignatureVersion: m.sign.SignatureVersion, Timestamp: timestamp, Signature: s}
+	err = m.sendMessage(data)
+	if err != nil {
+		debug.Println("send auth", err)
+		//fmt.Println("send auth", err)
+		return
+	}
+}
+
+func (m *Market) timeStamp() string {
+	return time.Now().UTC().Format("2006-01-02T15:04:05")
+}
+
 // handlePing 处理Ping
 func (m *Market) handlePing(ping pingData) (err error) {
 	debug.Println("handlePing", ping)
 	m.lastPing = ping.Ping
-	var pong = pongData{Pong: ping.Ping}
-	err = m.sendMessage(pong)
+
+	data := pongData{Pong: ping.Ping}
+	err = m.sendMessage(data)
 	if err != nil {
 		return err
 	}
@@ -226,13 +325,26 @@ func (m *Market) handlePing(ping pingData) (err error) {
 // Subscribe 订阅
 func (m *Market) Subscribe(topic string, listener Listener) error {
 	debug.Println("subscribe", topic)
-
+	if m.isMustAuth {
+		for {
+			if m.isAuthSuccess {
+				break
+			}
+			time.Sleep(1 * time.Second)
+		}
+	}
 	var isNew = false
 
 	// 如果未曾发送过订阅指令，则发送，并等待订阅操作结果，否则直接返回
 	if _, ok := m.subscribedTopic[topic]; !ok {
 		m.subscribeResultCb[topic] = make(jsonChan)
-		m.sendMessage(subData{ID: topic, Sub: topic})
+		var data interface{}
+		data = subData{ID: topic, Sub: topic}
+		if m.isMustAuth {
+			data = authReqData{OP: "sub", Topic: topic, CID: m.getCid()}
+		}
+		//fmt.Println("sub:", data)
+		m.sendMessage(data)
 		isNew = true
 	} else {
 		debug.Println("send subscribe before, reset listener only")
@@ -244,11 +356,21 @@ func (m *Market) Subscribe(topic string, listener Listener) error {
 	m.subscribedTopic[topic] = true
 
 	if isNew {
+		//fmt.Println("新订阅,等待订阅结果")
 		var json = <-m.subscribeResultCb[topic]
 		// 判断订阅结果，如果出错则返回出错信息
+		if m.isMustAuth {
+			s, _ := json.Get("err-code").Int()
+			if s > 0 {
+				return errors.New("订阅失败")
+			}
+			fmt.Println("订阅成功", topic)
+		}
 		if msg, err := json.Get("err-msg").String(); err == nil {
+			fmt.Println("订阅成功", topic)
 			return fmt.Errorf(msg)
 		}
+
 	}
 	return nil
 }
@@ -259,7 +381,12 @@ func (m *Market) Unsubscribe(topic string) error {
 
 	// 如果未曾发送过订阅指令，则发送，并等待订阅操作结果，否则直接返回
 	if _, ok := m.subscribedTopic[topic]; ok {
-		m.sendMessage(unSubData{ID: topic, Unsub: topic})
+		var data interface{}
+		data = unSubData{ID: topic, Unsub: topic}
+		if m.isMustAuth {
+			data = authReqData{OP: "unsub", Topic: topic, CID: m.getCid()}
+		}
+		m.sendMessage(data)
 	} else {
 		debug.Println("not exsit sub toipic ")
 	}
@@ -329,4 +456,109 @@ func (m *Market) Close() error {
 		return err
 	}
 	return nil
+}
+
+func (m *Market) handleAuthPing(data *simplejson.Json) error {
+	b, err := data.MarshalJSON()
+	if err != nil {
+		debug.Println("handleAuthPing", err)
+		//fmt.Println("json unmarsha error111", err)
+
+		return err
+	}
+	d := new(authPingPongData)
+	err = json.Unmarshal(b, d)
+	if err != nil {
+		debug.Println("handleAuthPing json unMarsha", err)
+		//fmt.Println("json unmarsha error", err)
+		return err
+	}
+	//fmt.Println("test", d)
+	m.lastPing = d.TS
+
+	rData := authPingPongData{OP: "pong", TS: d.TS}
+	//fmt.Println("发送ping处理消息", rData)
+	err = m.sendMessage(rData)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (m *Market) handleAuthPong(data *simplejson.Json) error {
+	b, err := data.MarshalJSON()
+	if err != nil {
+		debug.Println("handleAuthPong", err)
+		return err
+	}
+	d := new(authPingPongData)
+	err = json.Unmarshal(b, d)
+	if err != nil {
+		debug.Println("handleAuthPong json unMarsha", err)
+		return err
+	}
+
+	m.lastPing = d.TS
+
+	rData := authPingPongData{OP: "ping", TS: d.TS}
+	//fmt.Println("发送pong处理消息",rData)
+	err = m.sendMessage(rData)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (m *Market) handleAuthMessage(data *simplejson.Json) {
+	debug.Println("收到auth结果.....")
+	debug.Println(data)
+	//fmt.Println("handle auth", data)
+
+	errCode := data.Get("error-code").MustInt()
+	if errCode == 0 {
+		m.isAuthSuccess = true
+	}
+}
+
+func (m *Market) handleAuthSub(data *simplejson.Json) {
+	topic := data.Get("topic").MustString()
+	//errCode := data.Get("error-cod").MustInt()
+	debug.Println("handleAuthSub,topic:", topic)
+	if topic == "" {
+		return
+	}
+	op := data.Get("op").MustString()
+	if op == "sub" {
+		c, ok := m.subscribeResultCb[topic]
+		if ok {
+			c <- data
+		}
+		return
+	}
+
+	return
+}
+
+func (m *Market) handleAuthUnSub(data *simplejson.Json) {
+	debug.Println("handleAuthUnSub.....")
+	topic := data.Get("topic").MustString()
+	debug.Println("handleAuthUnSub,topic:", topic)
+	debug.Println(data)
+}
+
+func (m *Market) handleAuthNotify(data *simplejson.Json) {
+	topic := data.Get("topic").MustString()
+	debug.Println("handleAuthNotify,topic:", topic)
+	if topic == "" {
+		return
+	}
+	m.listenerMutex.Lock()
+	listener, ok := m.listeners[topic]
+	m.listenerMutex.Unlock()
+	if ok {
+		debug.Println("handleSubscribe", data)
+		listener(topic, data)
+	}
+	fmt.Println(m.subscribeResultCb)
+	return
 }

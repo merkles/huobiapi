@@ -22,6 +22,7 @@ func sortKeys(keys []string) []string {
 }
 
 func computeHmac256(data string, secret string) string {
+	//fmt.Println("s_payload,",data," s:",secret)
 	key := []byte(secret)
 	h := hmac.New(sha256.New, key)
 	h.Write([]byte(data))
